@@ -12,7 +12,7 @@ const COLL: &str = "books";
 const ID: &str = "_id";
 const NAME: &str = "name";
 const AUTHOR: &str = "author";
-const NUM_PAGES: &str = "num_pages";
+const PAGES: &str = "pages";
 const CREATED_AT: &str = "created_at";
 const TAGS: &str = "tags";
 
@@ -27,5 +27,109 @@ impl DB {
         client_options.app_name = Some("rust-bookstore".to_string());
 
         Ok(Self { client: Client::with_options(client_options)?, })
+    }
+
+    pub async fn fetch_books(&self) -> Result<Vec<Book>> {
+
+        let mut cursor = self
+            .get_collection()
+            .find(None, None)
+            .await
+            .map_err(MongoQueryError)?;
+
+        let mut result: Vec<Book> = Vec::new();
+        while let Some(doc) = cursor.next().await {
+            result.push(self.doc_to_book(&doc?)?);
+        }
+        Ok(result)
+
+    }
+
+    pub async fn create_book(&self, entry: &BookRequest) -> Result<()> {
+
+        let doc = doc! {
+            NAME: entry.name.clone(),
+            AUTHOR: entry.author.clone(),
+            PAGES: entry.pages as i32,
+            CREATED_AT: Utc::now(),
+            TAGS: entry.tags.clone(),
+        };
+        self.get_collection()
+            .insert_one(doc, None)
+            .await
+            .map_err(MongoQueryError)?;
+
+        Ok(())
+
+    }
+
+    pub async fn delete_book(&self, id: &str) -> Result<()> {
+
+        let oid = ObjectId::with_string(id).map_err(|_| InvalidIDError(id.to_owned()))?;
+        let filter = doc! {
+            "_id": oid,
+        };
+        self.get_collection()
+            .delete_one(filter, None)
+            .await
+            .map_err(MongoQueryError)?;
+
+        Ok(())
+
+    }
+
+    pub async fn edit_book(&self, id: &str, entry: &BookRequest) -> Result<()> {
+        
+        let oid = ObjectId::with_string(id).map_err(|_| InvalidIDError(id.to_owned()))?;
+        let query = doc! {
+            "_id": oid,
+        };
+        let doc = doc! {
+            NAME: entry.name.clone(),
+            AUTHOR: entry.author.clone(),
+            PAGES: entry.pages as i32,
+            CREATED_AT: Utc::now(),
+            TAGS: entry.tags.clone(),
+        };
+
+        self.get_collection()
+            .update_one(query, doc, None)
+            .await
+            .map_err(MongoQueryError)?;
+
+        Ok(())
+
+    }
+
+    fn get_collection(&self) -> Collection{
+        self.client.database(DB_NAME).collection(COLL)
+    }
+
+    fn doc_to_book(&self, doc: &Document) -> Result<Book> {
+
+        let id = doc.get_object_id(ID)?;
+        let author = doc.get_str(AUTHOR)?;
+        let name = doc.get_str(NAME)?;
+        let pages = doc.get_i32(PAGES)?;
+        let created_at = doc.get_datetime(CREATED_AT)?;
+        let tags = doc.get_array(TAGS)?;
+
+        let book = Book {
+            id: id.to_hex(),
+            name: name.to_owned(),
+            author: author.to_owned(),
+            pages: pages as usize,
+            created_at: *created_at,
+            tags: tags
+                .iter()
+                .filter_map(|entry| match entry {
+                    Bson::String(v) => Some(v.to_owned()),
+                    _ => None,
+                })
+                .collect(),
+        };
+
+        Ok(book)
+
     }
 }
